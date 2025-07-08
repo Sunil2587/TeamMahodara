@@ -68,7 +68,7 @@ export default function Contributions() {
     try {
       localStorage.setItem("profileName", contributor.trim());
 
-      const response = await fetch("https://ttdctwfsfvlizsjvsjfo.functions.supabase.co/create-payment-fresh", {
+      const response = await fetch("https://ttdctwfsfvlizsjvsjfo.functions.supabase.co/create-payment", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

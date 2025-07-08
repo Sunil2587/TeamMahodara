@@ -3,8 +3,12 @@ import PageContainer from "../components/PageContainer";
 import BackgroundWrapper from "../components/BackgroundWrapper";
 import { supabase } from "../supabaseClient";
 
+// ✅ Correct URL
 const CREATE_PAYMENT_URL =
-  "https://ttdctwfsfvlizsjvsjfo.functions.supabase.co/create-payment-fresh";
+  "https://ttdctwfsfvlizsjvsjfo.supabase.co/functions/v1/create-payment-fresh";
+
+// ✅ Paste your anon/public key here securely (don't expose in production)
+const SUPABASE_ANON_KEY = "your_anon_key_here"; // Replace with actual anon key
 
 const getDefaultContributor = () => localStorage.getItem("profileName") || "";
 
@@ -69,7 +73,10 @@ export default function Contributions() {
       };
       const res = await fetch(CREATE_PAYMENT_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        },
         body: JSON.stringify(payload),
       });
       const data = await res.json();
@@ -92,7 +99,6 @@ export default function Contributions() {
     const contributor = localStorage.getItem("profileName");
 
     if (order_id && contributor && order_amount) {
-      // Prevent duplicate entries for the same order_id
       const { data: existing, error: fetchError } = await supabase
         .from("contributions")
         .select("id")

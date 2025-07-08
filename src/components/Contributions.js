@@ -1,4 +1,3 @@
-// 📁 src/pages/Contributions.js
 import React, { useEffect, useState } from "react";
 import PageContainer from "../components/PageContainer";
 import BackgroundWrapper from "../components/BackgroundWrapper";
@@ -60,7 +59,7 @@ export default function Contributions() {
       alert("Please enter a valid contributor name and amount.");
       return;
     }
-    localStorage.setItem("profileName", contributor);
+    localStorage.setItem("profileName", contributor.trim());
     setLoading(true);
     try {
       const payload = {
@@ -93,17 +92,26 @@ export default function Contributions() {
     const contributor = localStorage.getItem("profileName");
 
     if (order_id && contributor && order_amount) {
-      const { error } = await supabase.from("contributions").insert([
-        {
-          contributor,
-          amount: parseFloat(order_amount),
-          method: "online",
-          status: "success",
-          payment_id: order_id,
-          note: "Paid via Cashfree",
-        },
-      ]);
-      if (!error) fetchContributions();
+      // Prevent duplicate entries for the same order_id
+      const { data: existing, error: fetchError } = await supabase
+        .from("contributions")
+        .select("id")
+        .eq("payment_id", order_id)
+        .maybeSingle();
+
+      if (!fetchError && !existing) {
+        const { error } = await supabase.from("contributions").insert([
+          {
+            contributor,
+            amount: parseFloat(order_amount),
+            method: "online",
+            status: "success",
+            payment_id: order_id,
+            note: "Paid via Cashfree",
+          },
+        ]);
+        if (!error) fetchContributions();
+      }
       window.history.replaceState({}, document.title, window.location.pathname);
     }
   }

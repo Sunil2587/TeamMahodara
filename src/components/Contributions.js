@@ -3,13 +3,6 @@ import PageContainer from "../components/PageContainer";
 import BackgroundWrapper from "../components/BackgroundWrapper";
 import { supabase } from "../supabaseClient";
 
-// ✅ Correct URL
-const CREATE_PAYMENT_URL =
-  "https://ttdctwfsfvlizsjvsjfo.supabase.co/functions/v1/create-payment-fresh";
-
-// ✅ Paste your anon/public key here securely (don't expose in production)
-const SUPABASE_ANON_KEY = "your_anon_key_here"; // Replace with actual anon key
-
 const getDefaultContributor = () => localStorage.getItem("profileName") || "";
 
 export default function Contributions() {
@@ -21,7 +14,14 @@ export default function Contributions() {
 
   useEffect(() => {
     fetchContributions();
-    handleRedirectPayment();
+
+    // Load Cashfree SDK (if not already loaded via index.html)
+    if (!window.Cashfree) {
+      const script = document.createElement("script");
+      script.src = "https://sdk.cashfree.com/js/v3/cashfree.js";
+      script.async = true;
+      document.body.appendChild(script);
+    }
   }, []);
 
   async function fetchContributions() {
@@ -38,6 +38,7 @@ export default function Contributions() {
       alert("Please enter a valid contributor name and amount.");
       return;
     }
+
     setLoading(true);
     const { error } = await supabase.from("contributions").insert([
       {
@@ -49,6 +50,7 @@ export default function Contributions() {
       },
     ]);
     setLoading(false);
+
     if (!error) {
       setAmount("");
       fetchContributions();
@@ -63,62 +65,33 @@ export default function Contributions() {
       alert("Please enter a valid contributor name and amount.");
       return;
     }
-    localStorage.setItem("profileName", contributor.trim());
-    setLoading(true);
+
     try {
-      const payload = {
-        contributor: contributor.trim(),
-        amount: parseFloat(amount),
-        return_url: window.location.origin + "/contributions",
-      };
-      const res = await fetch(CREATE_PAYMENT_URL, {
+      localStorage.setItem("profileName", contributor.trim());
+
+      const response = await fetch("https://<your-project-id>.supabase.co/functions/v1/create-payment", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          contributor: contributor.trim(),
+          amount: parseFloat(amount),
+        }),
       });
-      const data = await res.json();
-      if (res.ok && data.payment_link) {
-        window.location.href = data.payment_link;
-      } else {
-        alert("Payment failed: " + (data.error || "Unknown error"));
+
+      const data = await response.json();
+
+      if (!data?.payment_session_id) {
+        alert("Failed to create payment session.");
+        return;
       }
+
+      const cashfree = new window.Cashfree(data.payment_session_id);
+      cashfree.redirect(); // This opens the Drop Checkout
     } catch (err) {
-      alert("Error: " + err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleRedirectPayment() {
-    const params = new URLSearchParams(window.location.search);
-    const order_id = params.get("order_id");
-    const order_amount = params.get("order_amount");
-    const contributor = localStorage.getItem("profileName");
-
-    if (order_id && contributor && order_amount) {
-      const { data: existing, error: fetchError } = await supabase
-        .from("contributions")
-        .select("id")
-        .eq("payment_id", order_id)
-        .maybeSingle();
-
-      if (!fetchError && !existing) {
-        const { error } = await supabase.from("contributions").insert([
-          {
-            contributor,
-            amount: parseFloat(order_amount),
-            method: "online",
-            status: "success",
-            payment_id: order_id,
-            note: "Paid via Cashfree",
-          },
-        ]);
-        if (!error) fetchContributions();
-      }
-      window.history.replaceState({}, document.title, window.location.pathname);
+      console.error("Cashfree Payment Error:", err);
+      alert("Payment failed. Please try again.");
     }
   }
 
@@ -140,17 +113,13 @@ export default function Contributions() {
         <div className="flex justify-center gap-4 mb-2">
           <button
             onClick={() => setPaymentMode("cash")}
-            className={`px-4 py-2 rounded ${
-              paymentMode === "cash" ? "bg-yellow-500 text-white" : "bg-gray-200"
-            }`}
+            className={`px-4 py-2 rounded ${paymentMode === "cash" ? "bg-yellow-500 text-white" : "bg-gray-200"}`}
           >
             Pay Cash
           </button>
           <button
             onClick={() => setPaymentMode("online")}
-            className={`px-4 py-2 rounded ${
-              paymentMode === "online" ? "bg-yellow-500 text-white" : "bg-gray-200"
-            }`}
+            className={`px-4 py-2 rounded ${paymentMode === "online" ? "bg-yellow-500 text-white" : "bg-gray-200"}`}
           >
             Pay Online
           </button>

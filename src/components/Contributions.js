@@ -14,7 +14,7 @@ export default function Contributions() {
 
   useEffect(() => {
     fetchContributions();
-    // Load Cashfree Drop SDK
+
     if (!window.Cashfree) {
       const script = document.createElement("script");
       script.src = "https://sdk.cashfree.com/js/v3/cashfree.js";
@@ -70,7 +70,9 @@ export default function Contributions() {
 
       const response = await fetch("https://ttdctwfsfvlizsjvsjfo.functions.supabase.co/create-payment", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
           contributor: contributor.trim(),
           amount: parseFloat(amount),
@@ -199,4 +201,3 @@ export default function Contributions() {
     </BackgroundWrapper>
   );
 }
-  

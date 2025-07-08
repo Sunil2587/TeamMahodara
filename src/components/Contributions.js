@@ -14,7 +14,7 @@ export default function Contributions() {
 
   useEffect(() => {
     fetchContributions();
-
+    // Load Cashfree Drop SDK
     if (!window.Cashfree) {
       const script = document.createElement("script");
       script.src = "https://sdk.cashfree.com/js/v3/cashfree.js";
@@ -70,9 +70,7 @@ export default function Contributions() {
 
       const response = await fetch("https://ttdctwfsfvlizsjvsjfo.functions.supabase.co/create-payment", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contributor: contributor.trim(),
           amount: parseFloat(amount),
@@ -86,10 +84,15 @@ export default function Contributions() {
         return;
       }
 
+      if (!window.Cashfree) {
+        alert("Cashfree SDK not loaded.");
+        return;
+      }
+
       const cashfree = new window.Cashfree(data.payment_session_id);
       cashfree.redirect();
     } catch (err) {
-      console.error("Cashfree Payment Error:", err);
+      console.error("Cashfree Error:", err);
       alert("Payment failed. Please try again.");
     }
   }
@@ -196,3 +199,4 @@ export default function Contributions() {
     </BackgroundWrapper>
   );
 }
+  

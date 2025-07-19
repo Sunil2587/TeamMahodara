@@ -1,199 +1,216 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
+import { supabase } from "../supabaseClient";
 import PageContainer from "../components/PageContainer";
 import BackgroundWrapper from "../components/BackgroundWrapper";
-import { supabase } from "../supabaseClient";
-
-const getDefaultContributor = () => localStorage.getItem("profileName") || "";
+import { useAuth } from "../hooks/useAuth";
 
 export default function Contributions() {
+  const { user } = useAuth();
   const [contributions, setContributions] = useState([]);
-  const [contributor, setContributor] = useState(getDefaultContributor());
+  const [contributor, setContributor] = useState("");
   const [amount, setAmount] = useState("");
-  const [paymentMode, setPaymentMode] = useState("cash");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetchContributions();
+    const fetchProfile = async () => {
+      if (user) {
+        const { data } = await supabase
+          .from("users")
+          .select("name")
+          .eq("id", user.id)
+          .single();
+        if (data?.name) {
+          setContributor(data.name);
+        }
+      }
+    };
+    fetchProfile();
+  }, [user]);
 
-    if (!window.Cashfree) {
-      const script = document.createElement("script");
-      script.src = "https://sdk.cashfree.com/js/v3/cashfree.js";
-      script.async = true;
-      document.body.appendChild(script);
-    }
-  }, []);
-
-  async function fetchContributions() {
-    const { data, error } = await supabase
+  const fetchContributions = useCallback(async () => {
+    const { data, error: fetchError } = await supabase
       .from("contributions")
       .select("*")
       .order("created_at", { ascending: false });
-    if (!error) setContributions(data || []);
-  }
 
-  async function handleAddContribution(e) {
-    e.preventDefault();
-    if (!contributor.trim() || !amount || isNaN(Number(amount)) || Number(amount) <= 0) {
-      alert("Please enter a valid contributor name and amount.");
-      return;
-    }
+    if (fetchError) setError("Failed to fetch contributions.");
+    else setContributions(data || []);
+  }, []);
 
+  useEffect(() => {
+    fetchContributions();
+  }, [fetchContributions]);
+
+  const handlePayOnline = async () => {
+    if (!validateForm()) return;
     setLoading(true);
-    const { error } = await supabase.from("contributions").insert([
-      {
-        contributor,
-        amount: parseFloat(amount),
-        method: "cash",
-        status: "success",
-        note: "Paid in cash",
-      },
-    ]);
-    setLoading(false);
+    setError(null); // Clear previous errors
 
-    if (!error) {
-      setAmount("");
-      fetchContributions();
-    } else {
-      alert("Failed to add cash contribution.");
-    }
-  }
+    let newContribution;
+    try {
+      const { data, error: insertError } = await supabase
+        .from("contributions")
+        .insert([{
+          contributor: contributor.trim(),
+          amount: +amount,
+          method: "online",
+          status: "pending",
+        }])
+        .select()
+        .single();
 
-  async function handleOnlinePayment(e) {
-    e.preventDefault();
-    if (!contributor.trim() || !amount || isNaN(Number(amount)) || Number(amount) <= 0) {
-      alert("Please enter a valid contributor name and amount.");
+      if (insertError) {
+        throw new Error(insertError.message || "Could not save contribution.");
+      }
+      newContribution = data;
+    } catch (err) {
+      setError(`Database error: ${err.message}`);
+      setLoading(false);
       return;
     }
 
     try {
-      localStorage.setItem("profileName", contributor.trim());
-
-      const response = await fetch("https://ttdctwfsfvlizsjvsjfo.functions.supabase.co/create-payment", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contributor: contributor.trim(),
-          amount: parseFloat(amount),
-        }),
+      console.log("Invoking 'create-cashfree-order' function with:", {
+        amount: +amount,
+        contributor: contributor.trim(),
+        contribution_id: newContribution.id,
       });
 
-      const data = await response.json();
+      // Call the Supabase Edge Function
+      const { data: functionData, error: functionError } = await supabase.functions.invoke('create-cashfree-order', {
+        body: {
+          amount: +amount,
+          contributor: contributor.trim(),
+          contribution_id: newContribution.id,
+        },
+      });
 
-      if (!data?.payment_session_id) {
-        alert("Failed to create payment session.");
-        return;
+      console.log("Function response:", { functionData, functionError });
+
+      if (functionError) {
+        // Handle errors returned from the function itself
+        // The actual error message from the function is in the 'context' property
+        const detailedError = functionError.context?.error || functionError.message;
+        throw new Error(detailedError);
       }
 
-      if (!window.Cashfree) {
-        alert("Cashfree SDK not loaded.");
-        return;
+      if (functionData && functionData.payment_session_id) {
+        console.log("Received payment session ID:", functionData.payment_session_id);
+        
+        if (!window.Cashfree) {
+          throw new Error("Cashfree SDK is not loaded. Please check your index.html file.");
+        }
+
+        // Initialize the SDK with the mode. The SDK is throwing an error if this is not provided.
+        const cashfreeMode = process.env.REACT_APP_CASHFREE_MODE || 'sandbox';
+        const cashfree = new window.Cashfree({
+          mode: cashfreeMode, // Use environment variable. Defaults to 'sandbox'.
+        });
+        
+        console.log("Initiating Cashfree redirect...");
+        cashfree.checkout({ 
+          paymentSessionId: functionData.payment_session_id, // Pass the session ID here as the error suggests
+          paymentStyle: "redirect"
+        }).then((result) => {
+          if (result.error) {
+            // This is a specific error from the Cashfree SDK if the session_id is invalid
+            console.error("Cashfree SDK reported an error:", result.error);
+            setError(`Payment Error: ${result.error.message}. Please check the console for details.`);
+            setLoading(false);
+          }
+          // If result.redirect is true, the browser will navigate away. No need to do anything.
+        }).catch(err => {
+          // This catches other potential errors during checkout initialization
+          console.error("Error during cashfree.checkout() call:", err);
+          setError(`A problem occurred with the payment gateway: ${err.message}`);
+          setLoading(false);
+        });
+      } else {
+        // This case handles when the function runs but doesn't return the expected data.
+        throw new Error("Failed to get a valid payment session from the server.");
       }
 
-      const cashfree = new window.Cashfree(data.payment_session_id);
-      cashfree.redirect();
     } catch (err) {
-      console.error("Cashfree Error:", err);
-      alert("Payment failed. Please try again.");
+      // This will catch errors from the function invocation, or from our own thrown errors.
+      console.error("Payment process error:", err);
+      setError(`Payment initiation failed: ${err.message}`);
+      setLoading(false);
     }
-  }
+  };
 
-  async function handleDeleteContribution(id) {
-    if (!window.confirm("Delete this contribution?")) return;
-    const { error } = await supabase.from("contributions").delete().eq("id", id);
-    if (!error) fetchContributions();
-    else alert("Failed to delete contribution.");
-  }
+  const handleAddContribution = async () => {
+    if (!validateForm()) return;
+    setLoading(true);
+    const { error: insertError } = await supabase.from("contributions").insert([
+      { contributor: contributor.trim(), amount: +amount, method: "cash", status: "success" },
+    ]);
+    setLoading(false);
+    if (!insertError) {
+      setAmount("");
+      fetchContributions();
+    } else {
+      setError("Cash contribution failed.");
+    }
+  };
 
-  const totalContribution = contributions.reduce(
-    (sum, c) => sum + (parseFloat(c.amount) || 0),
-    0
-  );
+  const validateForm = () => {
+    setError(null);
+    if (!contributor.trim() || !amount || isNaN(+amount) || +amount <= 0) {
+      setError("Please enter a valid name and a positive amount.");
+      return false;
+    }
+    return true;
+  };
+
+  const total = contributions
+    .filter(c => c.status === 'success')
+    .reduce((sum, c) => sum + (parseFloat(c.amount) || 0), 0);
 
   return (
     <BackgroundWrapper>
-      <PageContainer title="CONTRIBUTIONS">
-        <div className="flex justify-center gap-4 mb-2">
-          <button
-            onClick={() => setPaymentMode("cash")}
-            className={`px-4 py-2 rounded ${paymentMode === "cash" ? "bg-yellow-500 text-white" : "bg-gray-200"}`}
-          >
-            Pay Cash
-          </button>
-          <button
-            onClick={() => setPaymentMode("online")}
-            className={`px-4 py-2 rounded ${paymentMode === "online" ? "bg-yellow-500 text-white" : "bg-gray-200"}`}
-          >
-            Pay Online
-          </button>
-        </div>
-
-        <form
-          onSubmit={paymentMode === "cash" ? handleAddContribution : handleOnlinePayment}
-          className="flex flex-col gap-2 px-4 pb-4"
-        >
+      <PageContainer title="CONTRIBUTIONS" userName={contributor}>
+        <div className="flex flex-col gap-2 px-4 pb-4">
           <input
             type="text"
             placeholder="Contributor Name"
-            className="rounded-lg px-3 py-2 border border-yellow-400 bg-white/70 focus:outline-none text-black"
+            className="rounded px-3 py-2 border"
             value={contributor}
-            onChange={(e) => {
-              setContributor(e.target.value);
-              localStorage.setItem("profileName", e.target.value);
-            }}
+            onChange={(e) => setContributor(e.target.value)}
             required
           />
           <input
             type="number"
             min="1"
-            step="0.01"
             placeholder="Amount"
-            className="rounded-lg px-3 py-2 border border-yellow-400 bg-white/70 focus:outline-none text-black"
+            className="rounded px-3 py-2 border"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
             required
           />
-          <button
-            type="submit"
-            disabled={loading}
-            className="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 rounded-lg transition"
-          >
-            {loading
-              ? "Processing..."
-              : paymentMode === "cash"
-              ? "Add Cash Contribution"
-              : "Pay Online"}
-          </button>
-        </form>
+          {error && <div className="text-red-500 text-sm text-center p-2 bg-red-100 rounded">{error}</div>}
+          
+          <div className="flex gap-2">
+            <button onClick={handleAddContribution} disabled={loading} className="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-2 rounded disabled:bg-gray-400">
+              {loading ? "..." : "Add Cash"}
+            </button>
+            <button onClick={handlePayOnline} disabled={loading} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded disabled:bg-gray-400">
+              {loading ? "..." : "Pay Online"}
+            </button>
+          </div>
+        </div>
 
-        <div className="text-center text-yellow-900 font-bold mb-2">
-          Total Contribution: ₹{totalContribution}
+        <div className="text-center font-bold mb-2">
+          Total Contribution: ₹{total.toFixed(2)}
         </div>
 
         <div className="grid grid-cols-2 gap-2 px-3 pb-8 mt-4">
           {contributions.map((c) => (
-            <div
-              key={c.id}
-              className="relative rounded-xl shadow p-2 flex flex-col items-center justify-center gap-1 transition"
-              style={{
-                minHeight: "54px",
-                fontSize: "0.95rem",
-                background: "rgba(255,255,255,0.35)",
-                backdropFilter: "blur(2px)",
-                color: "#166534",
-              }}
-            >
-              <span className="text-xl mb-0.5" style={{ color: "#388e3c" }}>₹</span>
-              <span className="text-xs font-semibold">{c.contributor}</span>
-              <span className="text-sm font-bold mt-0.5">{c.amount}</span>
-              <span className="text-xs text-gray-700">{c.method.toUpperCase()}</span>
-              <button
-                onClick={() => handleDeleteContribution(c.id)}
-                className="absolute top-2 right-2 bg-red-500 hover:bg-red-600 text-white rounded-full px-2 py-1 text-xs font-bold shadow transition"
-              >
-                Delete
-              </button>
+            <div key={c.id} className={`rounded shadow p-2 ${c.status === 'success' ? 'bg-green-100' : 'bg-yellow-100'}`}>
+              <div className="font-semibold">{c.contributor}</div>
+              <div>₹{c.amount}</div>
+              <div className="text-xs capitalize">Status: {c.status}</div>
+              
             </div>
           ))}
         </div>
